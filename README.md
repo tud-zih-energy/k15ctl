@@ -7,8 +7,6 @@ AMD Family 15h (aka Bulldozer) P-State, frequency and voltage modification utili
 ----------
 USE THIS PROGRAM AT YOU OWN RISK. IT MAY DAMAGE YOUR HARDWARE.
 
-If you are unsure about the result, always run with -dry-run first.
-
 
 1. What the program can do
 --------------------------
