@@ -26,6 +26,7 @@
 #include <string.h>
 #include <math.h>
 
+#include <cpuid.h>
 
 #define PSTATE_CTL      0xc0010062
 #define PSTATE_STATUS   0xc0010063
@@ -43,6 +44,8 @@
 #define NBP1            0x164
 
 static int boosted_states;
+
+static int model;
 
 union pstate {
     uint64_t data;
@@ -64,8 +67,7 @@ union nbpstate {
     uint32_t data;
     struct {
         uint32_t nbPstateEn : 1;
-        uint32_t nbFid : 5;
-        uint32_t reserved1 : 1;
+        uint32_t nbFid : 6; /* 5 + 1 reserved if model < 0x10*/
         uint32_t nbDid : 1;
         uint32_t reserved2 : 2;
         uint32_t nbVid : 7;
@@ -102,7 +104,10 @@ static inline int coreCof(union pstate p)
 
 static inline int nbCof(union nbpstate nbp)
 {
-    return (200*(nbp.val.nbFid+0x4))>>nbp.val.nbDid;
+    if (model < 0x10)
+        return (200*((nbp.val.nbFid&0x1F)+0x4))>>nbp.val.nbDid;
+    else
+        return (100*(nbp.val.nbFid+0x4))>>nbp.val.nbDid;
 }
 
 
@@ -306,8 +311,13 @@ void __showNbpstates(char *nb, int dry_run, int dry_num, union nbpstate dry_nbp)
             nbp = dry_nbp;
         printf("NB P-State %d",i);
         if(nbp.val.nbPstateEn)
-            printf("\t %8d %8d %8d %8d MHz %8.1f mV\n", nbp.val.nbFid, nbp.val.nbDid, nbp.val.nbVid,
-                nbCof(nbp), nbpgetU(nbp)); 
+            if (model >= 0x10)
+                printf("\t %8d %8d %8d %8d MHz %8.1f mV\n", nbp.val.nbFid, nbp.val.nbDid, nbp.val.nbVid,
+                    nbCof(nbp), nbpgetU(nbp)); 
+            else
+                printf("\t %8d %8d %8d %8d MHz %8.1f mV\n", (nbp.val.nbFid & 0x1F), nbp.val.nbDid, nbp.val.nbVid,
+                    nbCof(nbp), nbpgetU(nbp)); 
+
         else
         printf("\t %8s\n","unused");
     }
@@ -413,7 +423,15 @@ int main(int argc,  char** argv){
     char *cpus, *nb;
     cpus=nb=0;
     double pd;
-    int dry_run=0,p,cf,cd,cv,cnp,en,np,nf,nd,nv,nben; 
+
+    unsigned int eax,ebx,ecx,edx;
+    unsigned int ebx_c='A'|'u'<<8|'t'<<16|'h'<<24;
+    unsigned int edx_c='e'|'n'<<8|'t'<<16|'i'<<24;
+    unsigned int ecx_c='c'|'A'<<8|'M'<<16|'D'<<24;
+
+    int return_value, family;
+
+    unsigned int dry_run=0,p,cf,cd,cv,cnp,en,np,nf,nd,nv,nben; 
     p=cf=cd=cv=cnp=pd=en=np=nf=nd=nv=nben=-1;
     int isBoosted = 0;
     union cofid_status costat;
@@ -422,6 +440,30 @@ int main(int argc,  char** argv){
         help();
         exit(EXIT_SUCCESS);
     }
+
+    /* make sure we are on AMD */
+    return_value = __get_cpuid( 0, &eax, &ebx, &ecx, &edx );
+    if (ebx != ebx_c || ecx != ecx_c || edx != edx_c)
+    {
+        char buffer[13];
+        memcpy(buffer, &ebx_c, 4);
+        memcpy(&buffer[4], &edx_c, 4);
+        memcpy(&buffer[8], &ecx_c, 4);
+        buffer[13]='\0';
+        fprintf(stderr,"This program is intended to be used on an AMD Family 15 processors. You are using a %s processor\n",buffer);
+        exit(1);
+    }
+
+    /* get family / model */
+    return_value = __get_cpuid( 1, &eax, &ebx, &ecx, &edx );
+    family= ((eax >> 8 ) & 0xF) + (( eax >> 20 ) & 0xFF);
+    if( family != 0x15 )
+    {
+        fprintf(stderr,"This program is intended to be used on an AMD Family 15 processors. You are using a Family %xh processor\n",family);
+        exit(1);
+
+    }
+    model = ((eax >> 4) & 0xF ) | ( (eax >> 12) & 0xF0 ) ;
 
     costat.data = rdmsr(0, COFVID_STATUS);
     int minVid, maxVid;
